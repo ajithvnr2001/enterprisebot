@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-build-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Helm lint + template (incl. overrides harness uses)
+        run: |
+          helm lint ./chart
+          helm template demo ./chart -n demo --set replicaCount=3 --set config.appName=ci --set config.version=0.0.0-ci >/dev/null
+          helm template demo ./chart -n demo --set ingress.host=ci.local >/dev/null
+          helm lint ./lab/broken-chart || true
+
+      - name: Build service image
+        run: docker build -t demo-service:${{ github.sha }} ./service
+
+      - name: Trivy scan (fail on HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: demo-service:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
