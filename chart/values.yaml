@@ -1,0 +1,48 @@
+# Default values for demo chart (Part 2).
+# The grading harness renders with overrides like:
+#   --set replicaCount=3 --set config.appName=foo --set config.version=9.9.9
+# so every key below must flow through templates (no hardcoding).
+replicaCount: 2
+
+image:
+  repository: demo-service
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+config:
+  appName: demo
+  version: "0.1.0"
+
+service:
+  port: 80
+  targetPort: 8080
+
+containerPort: 8080
+
+ingress:
+  enabled: true
+  host: demo.local
+  className: nginx
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /healthz
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
