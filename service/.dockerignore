@@ -1,0 +1,13 @@
+# Ignore build context noise for a clean, small image.
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+Dockerfile
+.dockerignore
+README.md
+*.log
