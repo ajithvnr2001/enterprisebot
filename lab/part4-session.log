@@ -1,0 +1,531 @@
+Script started on 2026-10-09 17:56:29+00:00 [<not executed on terminal>]
++ cd /data/opencode/assignment/lab
++ kubectl config use-context kind-labtest
+Switched to context "kind-labtest".
++ echo '=== 1. show broken values ==='
+=== 1. show broken values ===
++ cat broken-chart/values.yaml
+# Debug lab — values.
+#
+# Lab rules (also in the assignment):
+#   * You may change anything in this chart — values or templates.
+#   * You may NOT change image.repository or image.tag.
+#   * You may NOT modify anything under ../cluster-state/.
+#   * You may NOT delete workloads to make a symptom disappear.
+
+image:
+  repository: docker.io/ebinterview/eb-debug-app
+  tag: "1.0.1"
+  pullPolicy: IfNotPresent
+
+common:
+  # Every workload serves plain HTTP on this port.
+  port: 8080
+
+backend:
+  replicas: 1
+  env:
+    APP_MODE: "api"
+    APP_NAME: "backend"
+    VERSION: "2.0.0"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+gateway:
+  replicas: 1
+  env:
+    APP_MODE: "gateway"
+    APP_NAME: "gateway"
+    VERSION: "2.0.0"
+    BACKEND_URL: "http://backend.default.svc:8080"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+worker:
+  replicas: 1
+  env:
+    APP_MODE: "worker"
+    APP_NAME: "worker"
+    VERSION: "2.0.0"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+reporter:
+  replicas: 1
+  serviceAccountName: reporter
+  env:
+    APP_MODE: "reporter"
+    APP_NAME: "reporter"
+    VERSION: "2.0.0"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+metrics:
+  replicas: 1
+  env:
+    APP_MODE: "api"
+    APP_NAME: "metrics"
+    VERSION: "2.0.0"
+  resources:
+    requests:
+      cpu: "2"
+      memory: "64Mi"
+    limits:
+      cpu: "4"
+      memory: "128Mi"
+
+migrate:
+  enabled: true
+  backoffLimit: 2
++ echo '=== 2. reset + up (expect helm Job error) ==='
+=== 2. reset + up (expect helm Job error) ===
++ ./scenario.sh reset
+==> removing the lab
+release "debug-lab" uninstalled
+Removed. Note: this does NOT restore the chart files — use git for that.
++ sleep 2
++ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab created
+Error from server (NotFound): error when creating "cluster-state/limits.yaml": namespaces "debug-lab" not found
+==> installing the broken chart
+Release "debug-lab" does not exist. Installing it now.
+Error: 1 error occurred:
+	* Job.batch "migrate" is invalid: spec.template.spec.restartPolicy: Required value: valid values: "OnFailure", "Never"
+
+
+
+[2mhelm reported an error. That is not your machine misbehaving —[0m
+[2mit is part of the exercise. Read the error; it is evidence.[0m
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
++ sleep 3
++ echo '=== 3. ensure cluster-state (LimitRange race) ==='
+=== 3. ensure cluster-state (LimitRange race) ===
++ kubectl apply -f cluster-state/namespace.yaml
+namespace/debug-lab unchanged
++ sleep 2
++ kubectl apply -f cluster-state/
+limitrange/debug-lab-guardrails created
+namespace/debug-lab unchanged
++ kubectl get limitrange -n debug-lab
+NAME                   CREATED AT
+debug-lab-guardrails   2026-10-09T17:56:42Z
++ echo '=== 4. pods + events (runAsNonRoot + metrics) ==='
+=== 4. pods + events (runAsNonRoot + metrics) ===
++ kubectl get pods -n debug-lab
+NAME                       READY   STATUS              RESTARTS   AGE
+backend-794fdd8bbd-cfx9k   0/1     ContainerCreating   0          8s
+gateway-6ddf8cd98d-699qq   0/1     ContainerCreating   0          8s
+metrics-95b697765-cn42p    0/1     Pending             0          8s
+reporter-969499965-7klr6   0/1     ContainerCreating   0          8s
+worker-c74cb95bd-pjg9r     0/1     ContainerCreating   0          8s
++ kubectl get events -n debug-lab --sort-by=.lastTimestamp
++ tail -n 30
+LAST SEEN   TYPE      REASON              OBJECT                          MESSAGE
+8s          Warning   FailedScheduling    pod/metrics-95b697765-cn42p     0/1 nodes are available: 1 Insufficient cpu. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod.
+8s          Normal    SuccessfulCreate    replicaset/reporter-969499965   Created pod: reporter-969499965-7klr6
+8s          Normal    SuccessfulCreate    replicaset/backend-794fdd8bbd   Created pod: backend-794fdd8bbd-cfx9k
+8s          Normal    SuccessfulCreate    replicaset/metrics-95b697765    Created pod: metrics-95b697765-cn42p
+8s          Normal    Scheduled           pod/gateway-6ddf8cd98d-699qq    Successfully assigned debug-lab/gateway-6ddf8cd98d-699qq to demo-control-plane
+8s          Normal    ScalingReplicaSet   deployment/worker               Scaled up replica set worker-c74cb95bd to 1
+8s          Normal    SuccessfulCreate    replicaset/gateway-6ddf8cd98d   Created pod: gateway-6ddf8cd98d-699qq
+8s          Normal    ScalingReplicaSet   deployment/gateway              Scaled up replica set gateway-6ddf8cd98d to 1
+8s          Normal    SuccessfulCreate    replicaset/worker-c74cb95bd     Created pod: worker-c74cb95bd-pjg9r
+8s          Normal    ScalingReplicaSet   deployment/metrics              Scaled up replica set metrics-95b697765 to 1
+8s          Normal    ScalingReplicaSet   deployment/backend              Scaled up replica set backend-794fdd8bbd to 1
+8s          Normal    Scheduled           pod/reporter-969499965-7klr6    Successfully assigned debug-lab/reporter-969499965-7klr6 to demo-control-plane
+8s          Normal    Scheduled           pod/worker-c74cb95bd-pjg9r      Successfully assigned debug-lab/worker-c74cb95bd-pjg9r to demo-control-plane
+8s          Normal    Scheduled           pod/backend-794fdd8bbd-cfx9k    Successfully assigned debug-lab/backend-794fdd8bbd-cfx9k to demo-control-plane
+8s          Normal    ScalingReplicaSet   deployment/reporter             Scaled up replica set reporter-969499965 to 1
+6s          Normal    Pulling             pod/reporter-969499965-7klr6    Pulling image "docker.io/ebinterview/eb-debug-app:1.0.1"
+6s          Normal    Pulling             pod/worker-c74cb95bd-pjg9r      Pulling image "docker.io/ebinterview/eb-debug-app:1.0.1"
+6s          Normal    Pulling             pod/backend-794fdd8bbd-cfx9k    Pulling image "docker.io/ebinterview/eb-debug-app:1.0.1"
+6s          Normal    Pulling             pod/gateway-6ddf8cd98d-699qq    Pulling image "docker.io/ebinterview/eb-debug-app:1.0.1"
++ tail -n 30
++ kubectl describe pod -n debug-lab -l app=backend
+    Readiness:  http-get http://:8080/healthz delay=3s timeout=3s period=5s successThreshold=1 failureThreshold=3
+    Environment:
+      APP_MODE:  api
+      APP_NAME:  backend
+      VERSION:   2.0.0
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-wjv9d (ro)
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   False 
+  Initialized                 True 
+  Ready                       False 
+  ContainersReady             False 
+  PodScheduled                True 
+Volumes:
+  kube-api-access-wjv9d:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              <none>
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  8s    default-scheduler  Successfully assigned debug-lab/backend-794fdd8bbd-cfx9k to demo-control-plane
+  Normal  Pulling    6s    kubelet            spec.containers{backend}: Pulling image "docker.io/ebinterview/eb-debug-app:1.0.1"
++ kubectl describe pod -n debug-lab -l app=metrics
++ tail -n 30
+      cpu:     4
+      memory:  128Mi
+    Requests:
+      cpu:      2
+      memory:   64Mi
+    Readiness:  http-get http://:8080/healthz delay=3s timeout=3s period=5s successThreshold=1 failureThreshold=3
+    Environment:
+      APP_MODE:  api
+      APP_NAME:  metrics
+      VERSION:   2.0.0
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-wzvwm (ro)
+Conditions:
+  Type           Status
+  PodScheduled   False 
+Volumes:
+  kube-api-access-wzvwm:
+    Type:                    Projected (a volume that contains injected data from multiple sources)
+    TokenExpirationSeconds:  3607
+    ConfigMapName:           kube-root-ca.crt
+    Optional:                false
+    DownwardAPI:             true
+QoS Class:                   Burstable
+Node-Selectors:              <none>
+Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+Events:
+  Type     Reason            Age   From               Message
+  ----     ------            ----  ----               -------
+  Warning  FailedScheduling  8s    default-scheduler  0/1 nodes are available: 1 Insufficient cpu. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod.
++ echo '=== 5. image inspect (USER, ExposedPorts) ==='
+=== 5. image inspect (USER, ExposedPorts) ===
++ docker image inspect docker.io/ebinterview/eb-debug-app:1.0.1 --format '{{json .Config}}'
++ python3 -m json.tool
++ head -n 20
+{
+    "User": "nonroot",
+    "ExposedPorts": {
+        "8081/tcp": {}
+    },
+    "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+    ],
+    "Entrypoint": [
+        "/eb-debug-app"
+    ],
+    "WorkingDir": "/home/nonroot"
+}
++ echo '=== 6. local repro: port 8080 vs 8081 ==='
+=== 6. local repro: port 8080 vs 8081 ===
++ docker run -d --rm --name ebtest-port -e APP_MODE=api -e APP_NAME=backend -e VERSION=2.0.0 -p 18081:8081 docker.io/ebinterview/eb-debug-app:1.0.1
+0d9de962df88299c530b53befc71f27bc9475efe5206ee9adcef4c0c2c0b9bbd
++ sleep 3
++ docker logs ebtest-port
++ head -n 5
+2026/10/09 17:56:44 eb-debug-app 2.0.0 starting: mode=api pod=0d9de962df88 listening on :8081 (image default is 8081; set PORT to override)
++ curl -s -m 3 http://localhost:18081/healthz
+{"status":"ok"}
++ echo
+
++ docker stop ebtest-port
++ echo '=== 7. local repro: gateway needs BACKEND_URL ==='
+=== 7. local repro: gateway needs BACKEND_URL ===
++ docker run -d --rm --name ebtest-gw -e APP_MODE=gateway -e APP_NAME=gateway -e VERSION=2.0.0 -p 18081:8081 docker.io/ebinterview/eb-debug-app:1.0.1
+12f5db29dc9263fcd50170597eacf58ab8f9beaf468bb68bee869e8204455686
++ sleep 3
++ docker logs ebtest-gw
++ head -n 5
+2026/10/09 17:56:47 eb-debug-app 2.0.0 starting: mode=gateway pod=12f5db29dc92 listening on :8081 (image default is 8081; set PORT to override)
++ curl -s -m 3 http://localhost:18081/healthz
+{"backend":"BACKEND_URL is not set","status":"unhealthy"}
++ echo
+
++ docker stop ebtest-gw
++ echo '=== 8. local repro: worker needs volume ==='
+=== 8. local repro: worker needs volume ===
++ head -n 5
++ docker run --rm --name ebtest-worker -e APP_MODE=worker -e APP_NAME=worker -e VERSION=2.0.0 docker.io/ebinterview/eb-debug-app:1.0.1
+2026/10/09 17:56:51 FATAL: worker could not initialise its cache: mkdir /var/cache/app: permission denied — the process needs a writable directory at /var/cache/app (mount a volume there, or set CACHE_DIR)
++ sleep 2
++ docker run -d --rm --read-only --tmpfs /var/cache/app --name ebtest-worker2 -e APP_MODE=worker -e APP_NAME=worker -e VERSION=2.0.0 -p 18081:8081 docker.io/ebinterview/eb-debug-app:1.0.1
+b7720655dc8610536df0490ebb383283cd498b8418f7f20204d993c8ae1cbdd2
++ sleep 3
++ docker logs ebtest-worker2
++ head -n 5
+2026/10/09 17:56:55 eb-debug-app 2.0.0 starting: mode=worker pod=b7720655dc86 listening on :8081 (image default is 8081; set PORT to override)
++ curl -s -m 3 http://localhost:18081/healthz
+{"last_heartbeat":"2026-10-09T17:56:55Z","status":"ok"}
++ echo
+
++ docker stop ebtest-worker2
++ echo '=== 9. RBAC before fix ==='
+=== 9. RBAC before fix ===
++ grep -A4 subjects
++ cat broken-chart/templates/rbac.yaml
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: {{ .Release.Namespace }}
++ kubectl auth can-i list pods -n debug-lab --as=system:serviceaccount:debug-lab:reporter
+no
++ echo 'reporter can-i exit:1'
+reporter can-i exit:1
++ kubectl auth can-i list pods -n debug-lab --as=system:serviceaccount:debug-lab:default
+yes
++ echo 'default can-i exit:0'
+default can-i exit:0
++ echo '=== 10. helm template snippets (broken) ==='
+=== 10. helm template snippets (broken) ===
++ helm template debug-lab ./broken-chart -n debug-lab
++ grep -E 'restartPolicy|name: default|BACKEND_URL|port: 808|runAsUser|cpu:'
++ head -n 20
+    name: default
+      port: 8080
+      port: 8080
+              port: 8080
+              cpu: 200m
+              cpu: 50m
+            - name: BACKEND_URL
+              port: 8080
+              cpu: 200m
+              cpu: 50m
+              port: 8080
+              cpu: "4"
+              cpu: "2"
+              port: 8080
+              cpu: 200m
+              cpu: 50m
+              port: 8080
+              cpu: 200m
+              cpu: 50m
+      restartPolicy: Always
++ echo '=== 11. apply fixes ==='
+=== 11. apply fixes ===
++ sed -i 's/restartPolicy: Always/restartPolicy: OnFailure/' broken-chart/templates/migrate-job.yaml
++ sed -i 's/name: default/name: reporter/' broken-chart/templates/rbac.yaml
++ python3
+values fixed
++ cat broken-chart/values.yaml
++ grep -E 'port:|BACKEND_URL|cpu:'
++ head -n 20
+  port: 8081
+      cpu: "50m"
+      cpu: "200m"
+    BACKEND_URL: "http://backend:8080"
+      cpu: "50m"
+      cpu: "200m"
+      cpu: "50m"
+      cpu: "200m"
+      cpu: "50m"
+      cpu: "200m"
+      cpu: "50m"
+      cpu: "200m"
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/backend.yaml'
+patch broken-chart/templates/backend.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/backend.yaml
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/gateway.yaml'
+patch broken-chart/templates/gateway.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/gateway.yaml
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/worker.yaml'
+patch broken-chart/templates/worker.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/worker.yaml
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/reporter.yaml'
+patch broken-chart/templates/reporter.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/reporter.yaml
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/metrics.yaml'
+patch broken-chart/templates/metrics.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/metrics.yaml
++ for f in broken-chart/templates/backend.yaml broken-chart/templates/gateway.yaml broken-chart/templates/worker.yaml broken-chart/templates/reporter.yaml broken-chart/templates/metrics.yaml broken-chart/templates/migrate-job.yaml
++ echo 'patch broken-chart/templates/migrate-job.yaml'
+patch broken-chart/templates/migrate-job.yaml
++ sed -i 's/runAsNonRoot: true/runAsNonRoot: true\n            runAsUser: 65532/' broken-chart/templates/migrate-job.yaml
++ grep -r runAsUser broken-chart/templates/
++ head
+broken-chart/templates/metrics.yaml:            runAsUser: 65532
+broken-chart/templates/worker.yaml:            runAsUser: 65532
+broken-chart/templates/gateway.yaml:            runAsUser: 65532
+broken-chart/templates/reporter.yaml:            runAsUser: 65532
+broken-chart/templates/backend.yaml:            runAsUser: 65532
+broken-chart/templates/migrate-job.yaml:            runAsUser: 65532
++ python3
+worker volume added
++ echo '=== 12. re-up + verify (expect 9/11, reporter gap) ==='
+=== 12. re-up + verify (expect 9/11, reporter gap) ===
++ ./scenario.sh reset
+==> removing the lab
+release "debug-lab" uninstalled
+namespace "debug-lab" deleted
+Removed. Note: this does NOT restore the chart files — use git for that.
++ sleep 2
++ ./scenario.sh up
+==> applying cluster environment (cluster-state/)
+namespace/debug-lab created
+Error from server (NotFound): error when creating "cluster-state/limits.yaml": namespaces "debug-lab" not found
+==> installing the broken chart
+Release "debug-lab" does not exist. Installing it now.
+NAME: debug-lab
+LAST DEPLOYED: Fri Oct  9 17:57:09 2026
+NAMESPACE: debug-lab
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+debug-lab installed into namespace debug-lab.
+
+Goal state:
+  * migrate Job: Completed
+  * backend, gateway, worker, reporter, metrics: all pods Running and 1/1 Ready
+  * gateway /status reports {"self":"ok","backend":"ok",...}
+
+Check your progress at any time:
+  ./scenario.sh verify
+
+Lab is (partially) installed. Investigate with kubectl, fix the chart,
+re-run './scenario.sh up' to apply your fixes, and './scenario.sh verify'
+to check progress.
++ sleep 15
++ kubectl get pods -n debug-lab
+NAME                       READY   STATUS      RESTARTS   AGE
+backend-66f89fcccb-94k79   1/1     Running     0          15s
+gateway-599696585c-8mw96   1/1     Running     0          15s
+metrics-7f497f58d5-gsjxv   1/1     Running     0          15s
+migrate-btlg7              0/1     Completed   0          15s
+reporter-78889bc55-7695g   0/1     Running     0          15s
+worker-6f9db4b465-6w4mz    1/1     Running     0          15s
++ kubectl get jobs -n debug-lab
+NAME      STATUS     COMPLETIONS   DURATION   AGE
+migrate   Complete   1/1           8s         16s
++ ./scenario.sh verify
+==> verifying goal state in namespace debug-lab
+  [32mPASS[0m  migrate Job completed
+  [32mPASS[0m  deployment backend: 1/1 ready
+  [32mPASS[0m  deployment gateway: 1/1 ready
+  [32mPASS[0m  deployment worker: 1/1 ready
+  [31mFAIL[0m  deployment reporter: 0/1 ready
+  [32mPASS[0m  deployment metrics: 1/1 ready
+  [32mPASS[0m  no pods in CrashLoopBackOff
+  [32mPASS[0m  ServiceAccount debug-lab/reporter can list pods
+  [32mPASS[0m  backend answers on http://backend:8080/healthz
+  [32mPASS[0m  gateway /status reports backend=ok
+  [31mFAIL[0m  reporter /report does not return a pod count
+
+[31m2 check(s) failing[0m, 9 passing. Keep digging — every failure is a symptom.
++ true
++ echo '=== 13. reporter gap evidence ==='
+=== 13. reporter gap evidence ===
++ kubectl auth can-i list pods -n debug-lab --as=system:serviceaccount:debug-lab:reporter
+yes
++ echo 'can-i exit:0'
+can-i exit:0
++ kubectl logs -n debug-lab -l app=reporter --tail=5
+2026/10/09 17:57:15 GET /healthz -> 503 (from 10.244.0.1:37412)
+2026/10/09 17:57:20 GET /healthz -> 503 (from 10.244.0.1:50230)
+2026/10/09 17:57:25 pod list failed: parse pod list: unexpected end of JSON input
+2026/10/09 17:57:25 GET /healthz -> 503 (from 10.244.0.1:50236)
+2026/10/09 17:57:30 GET /healthz -> 503 (from 10.244.0.1:56116)
++ kubectl get svc,endpoints -n debug-lab
+NAME               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+service/backend    ClusterIP   10.96.101.101   <none>        8080/TCP   23s
+service/gateway    ClusterIP   10.96.190.45    <none>        80/TCP     23s
+service/reporter   ClusterIP   10.96.249.243   <none>        8080/TCP   23s
+
+NAME                 ENDPOINTS          AGE
+endpoints/backend    10.244.0.14:8081   23s
+endpoints/gateway    10.244.0.16:8081   23s
+endpoints/reporter                      23s
++ echo '=== 14. show diff vs pristine ==='
+=== 14. show diff vs pristine ===
++ diff -r /tmp/broken-backup ./broken-chart
++ head -n 150
+diff -r /tmp/broken-backup/templates/backend.yaml ./broken-chart/templates/backend.yaml
+39a40
+>             runAsUser: 65532
+diff -r /tmp/broken-backup/templates/gateway.yaml ./broken-chart/templates/gateway.yaml
+39a40
+>             runAsUser: 65532
+diff -r /tmp/broken-backup/templates/metrics.yaml ./broken-chart/templates/metrics.yaml
+39a40
+>             runAsUser: 65532
+diff -r /tmp/broken-backup/templates/migrate-job.yaml ./broken-chart/templates/migrate-job.yaml
+16c16
+<       restartPolicy: Always
+---
+>       restartPolicy: OnFailure
+29a30
+>             runAsUser: 65532
+diff -r /tmp/broken-backup/templates/rbac.yaml ./broken-chart/templates/rbac.yaml
+34c34
+<     name: default
+---
+>     name: reporter
+diff -r /tmp/broken-backup/templates/reporter.yaml ./broken-chart/templates/reporter.yaml
+44a45
+>             runAsUser: 65532
+diff -r /tmp/broken-backup/templates/worker.yaml ./broken-chart/templates/worker.yaml
+39a40
+>             runAsUser: 65532
+45a47,52
+>           volumeMounts:
+>             - name: cache
+>               mountPath: /var/cache/app
+>       volumes:
+>         - name: cache
+>           emptyDir: {}
+diff -r /tmp/broken-backup/values.yaml ./broken-chart/values.yaml
+16c16
+<   port: 8080
+---
+>   port: 8081
+38c38
+<     BACKEND_URL: "http://backend.default.svc:8080"
+---
+>     BACKEND_URL: "http://backend:8080"
+84c84
+<       cpu: "2"
+---
+>       cpu: "50m"
+87c87
+<       cpu: "4"
+---
+>       cpu: "200m"
++ set +x
+done - see FINDINGS.md for analysis
+
+Script done on 2026-10-09 17:57:32+00:00 [COMMAND_EXIT_CODE="0"]
